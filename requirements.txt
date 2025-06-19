@@ -7,38 +7,15 @@ python-multipart==0.0.6
 pydantic==2.5.0
 pydantic-settings==2.1.0
 
-# OpenAI Integration
-openai==1.3.7
+# GROBID Processing
+requests==2.31.0
+beautifulsoup4==4.12.2
+lxml==4.9.3
 
-# LangGraph and LangChain
-langgraph==0.0.62
-langchain==0.1.0
-langchain-openai==0.0.2
-
-# Vector Database
-qdrant-client==1.7.0
-
-# PDF Processing
-PyPDF2==3.0.1
-pdfplumber==0.10.3
-pymupdf==1.23.8
-
-# Image Processing and OCR
-Pillow==10.1.0
-pytesseract==0.3.10
-pdf2image==1.16.3
-
-# Text Processing and Embeddings
-sentence-transformers==2.2.2
-tiktoken==0.5.2
+# Streamlit Frontend
+streamlit==1.28.0
 
 # Utility Libraries
 python-dotenv==1.0.0
-httpx==0.25.2
 aiofiles==23.2.1
 
-# Development and Testing (Optional)
-pytest==7.4.3
-pytest-asyncio==0.21.1
-black==23.11.0
-ruff==0.1.6
