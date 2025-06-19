@@ -272,7 +272,7 @@ class EnhancedGROBIDProcessor:
         return keywords
 
 
-def process_research_paper(pdf_content: bytes, filename: str = "paper.pdf", storage_dir: str = "data/papers") -> Dict:
+def process_research_paper(pdf_content: bytes, filename: str = "pdf", storage_dir: str = "data/papers") -> Dict:
     """Process a research paper PDF with text, images, and storage."""
     processor = EnhancedGROBIDProcessor(storage_dir=storage_dir)
     return processor.process_pdf(pdf_content, filename)
