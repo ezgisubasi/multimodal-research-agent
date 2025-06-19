@@ -1,6 +1,6 @@
 """
 Enhanced Research Paper Processor - Text + Images
-Combines GROBID text extraction with PyMuPDF image extraction
+Combines GROBID text extraction with PyMuPDF image extraction and saves data
 """
 
 import requests
@@ -12,41 +12,69 @@ from typing import Dict, List
 import fitz  # PyMuPDF
 from PIL import Image
 import io
-import base64
+import json
+import os
+from pathlib import Path
+import hashlib
 
-# Suppress SSL warnings
 warnings.filterwarnings("ignore", message="Unverified HTTPS request")
-
 logger = logging.getLogger(__name__)
 
 
 class EnhancedGROBIDProcessor:
-    """Enhanced GROBID processor with image extraction."""
+    """GROBID processor with image extraction and storage."""
     
-    def __init__(self):
+    def __init__(self, storage_dir: str = "data/papers"):
         self.server_url = "https://kermitt2-grobid.hf.space"
         self.timeout = 60
+        self.storage_dir = Path(storage_dir)
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
     
     def process_pdf(self, pdf_content: bytes, filename: str = "paper.pdf") -> Dict:
-        """Process PDF and return text + image information."""
+        """Process PDF, extract data, and save to storage."""
         logger.info(f"Processing: {filename}")
         start_time = time.time()
         
+        # Generate unique paper ID
+        paper_id = self._generate_paper_id(pdf_content, filename)
+        paper_dir = self.storage_dir / paper_id
+        
         try:
-            # 1. Extract text using GROBID
+            # Check if already processed
+            if (paper_dir / "data.json").exists():
+                logger.info(f"Paper already processed: {paper_id}")
+                with open(paper_dir / "data.json", 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                data['status'] = 'loaded_from_cache'
+                return data
+            
+            # Create directories
+            paper_dir.mkdir(parents=True, exist_ok=True)
+            figures_dir = paper_dir / "figures"
+            figures_dir.mkdir(exist_ok=True)
+            
+            # Extract text using GROBID
             text_result = self._extract_text_content(pdf_content, filename)
             
-            # 2. Extract images using PyMuPDF
-            image_result = self._extract_images(pdf_content)
+            # Extract and save images
+            image_result = self._extract_and_save_images(pdf_content, figures_dir)
             
-            # 3. Combine results
-            result = {**text_result, **image_result}
+            # Combine results
+            result = {
+                'paper_id': paper_id,
+                'filename': filename,
+                'storage_path': str(paper_dir),
+                **text_result, 
+                **image_result
+            }
             result['processing_time'] = time.time() - start_time
             result['status'] = 'success'
             
-            logger.info(f"Successfully processed in {result['processing_time']:.2f}s")
-            logger.info(f"Found {len(result.get('figures', []))} figures")
+            # Save metadata as JSON
+            with open(paper_dir / "data.json", 'w', encoding='utf-8') as f:
+                json.dump(result, f, indent=2, ensure_ascii=False)
             
+            logger.info(f"Successfully processed in {result['processing_time']:.2f}s")
             return result
             
         except Exception as e:
@@ -55,27 +83,28 @@ class EnhancedGROBIDProcessor:
                 'status': 'error',
                 'error': str(e),
                 'processing_time': time.time() - start_time,
-                'title': '', 'authors': [], 'abstract': '', 'sections': [],
-                'references': [], 'figures': [], 'total_figures': 0
+                'paper_id': paper_id
             }
     
     def _extract_text_content(self, pdf_content: bytes, filename: str) -> Dict:
         """Extract text using GROBID."""
         try:
-            # Call GROBID API
             files_data = {'input': (filename, pdf_content, 'application/pdf')}
-            
             response = requests.post(
                 f"{self.server_url}/api/processFulltextDocument",
-                files=files_data,
-                timeout=self.timeout,
-                verify=False
+                files=files_data, timeout=self.timeout, verify=False
             )
             
             if response.status_code == 200:
-                # Parse XML response
                 soup = BeautifulSoup(response.text, 'xml')
-                return self._extract_info(soup)
+                return {
+                    'title': self._get_title(soup),
+                    'authors': self._get_authors(soup),
+                    'abstract': self._get_abstract(soup),
+                    'sections': self._get_sections(soup),
+                    'references': self._get_references(soup),
+                    'keywords': self._get_keywords(soup)
+                }
             else:
                 raise Exception(f"GROBID HTTP {response.status_code}")
                 
@@ -86,71 +115,55 @@ class EnhancedGROBIDProcessor:
                 'sections': [], 'references': [], 'keywords': []
             }
     
-    def _extract_images(self, pdf_content: bytes) -> Dict:
-        """Extract images using PyMuPDF."""
+    def _extract_and_save_images(self, pdf_content: bytes, figures_dir: Path) -> Dict:
+        """Extract images and save to disk."""
         try:
-            # Open PDF
             pdf_doc = fitz.open(stream=pdf_content, filetype="pdf")
             figures = []
             
-            # Extract images from each page
-            for page_num in range(min(len(pdf_doc), 15)):  # First 15 pages
+            for page_num in range(min(len(pdf_doc), 15)):
                 page = pdf_doc[page_num]
                 image_list = page.get_images(full=True)
                 
-                for img_index, img in enumerate(image_list[:5]):  # Max 5 per page
+                for img_index, img in enumerate(image_list[:5]):
                     try:
-                        # Extract image data
                         xref = img[0]
                         pix = fitz.Pixmap(pdf_doc, xref)
                         
-                        if pix.n - pix.alpha < 4:  # Valid image
-                            # Convert to PIL Image
+                        if pix.n - pix.alpha < 4:
                             img_data = pix.tobytes("png")
                             pil_image = Image.open(io.BytesIO(img_data))
                             
-                            # Convert to base64 for storage
-                            buffer = io.BytesIO()
-                            pil_image.save(buffer, format='PNG')
-                            img_base64 = base64.b64encode(buffer.getvalue()).decode()
+                            # Save image
+                            figure_id = f"page_{page_num + 1}_img_{img_index + 1}"
+                            image_path = figures_dir / f"{figure_id}.png"
+                            pil_image.save(image_path)
                             
                             figures.append({
-                                'figure_id': f"page_{page_num + 1}_img_{img_index + 1}",
+                                'figure_id': figure_id,
                                 'page': page_num + 1,
-                                'image_index': img_index + 1,
                                 'size': pil_image.size,
-                                'format': 'PNG',
-                                'image_data': img_base64[:100] + "...",  # Truncated for display
-                                'full_size': len(img_base64)
+                                'file_path': str(image_path)
                             })
                         
-                        pix = None  # Free memory
+                        pix = None
                         
                     except Exception as e:
                         logger.warning(f"Failed to extract image {img_index} from page {page_num}: {e}")
                         continue
             
             pdf_doc.close()
-            
-            return {
-                'figures': figures,
-                'total_figures': len(figures)
-            }
+            return {'figures': figures, 'total_figures': len(figures)}
             
         except Exception as e:
             logger.error(f"Image extraction failed: {e}")
             return {'figures': [], 'total_figures': 0}
     
-    def _extract_info(self, soup: BeautifulSoup) -> Dict:
-        """Extract information from GROBID XML."""
-        return {
-            'title': self._get_title(soup),
-            'authors': self._get_authors(soup),
-            'abstract': self._get_abstract(soup),
-            'sections': self._get_sections(soup),
-            'references': self._get_references(soup),
-            'keywords': self._get_keywords(soup)
-        }
+    def _generate_paper_id(self, pdf_content: bytes, filename: str) -> str:
+        """Generate unique ID for paper."""
+        content_hash = hashlib.md5(pdf_content).hexdigest()[:12]
+        clean_filename = "".join(c for c in filename if c.isalnum() or c in "._-")[:20]
+        return f"{clean_filename}_{content_hash}"
     
     def _get_title(self, soup: BeautifulSoup) -> str:
         """Extract title."""
@@ -174,7 +187,6 @@ class EnhancedGROBIDProcessor:
                 else:
                     continue
                 
-                # Get affiliation
                 affiliation = author.find('affiliation')
                 org = affiliation.find('orgName') if affiliation else None
                 
@@ -204,7 +216,6 @@ class EnhancedGROBIDProcessor:
             if head and head.get_text().strip():
                 title = head.get_text().strip()
                 
-                # Get content
                 paragraphs = div.find_all('p')[:2]
                 content = ' '.join([p.get_text().strip() for p in paragraphs])
                 
@@ -225,7 +236,6 @@ class EnhancedGROBIDProcessor:
         for biblStruct in soup.find_all('biblStruct')[:10]:
             parts = []
             
-            # Authors
             authors = biblStruct.find_all('author')[:2]
             if authors:
                 names = []
@@ -238,7 +248,6 @@ class EnhancedGROBIDProcessor:
                 if names:
                     parts.append(', '.join(names))
             
-            # Title
             title = biblStruct.find('title')
             if title:
                 parts.append(f'"{title.get_text().strip()}"')
@@ -263,8 +272,7 @@ class EnhancedGROBIDProcessor:
         return keywords
 
 
-# Simple function for direct use
-def process_research_paper(pdf_content: bytes, filename: str = "paper.pdf") -> Dict:
-    """Process a research paper PDF with text and images."""
-    processor = EnhancedGROBIDProcessor()
+def process_research_paper(pdf_content: bytes, filename: str = "paper.pdf", storage_dir: str = "data/papers") -> Dict:
+    """Process a research paper PDF with text, images, and storage."""
+    processor = EnhancedGROBIDProcessor(storage_dir=storage_dir)
     return processor.process_pdf(pdf_content, filename)
