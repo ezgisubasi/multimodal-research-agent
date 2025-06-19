@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Research Paper Analyzer</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <h1>📄 Research Paper Analyzer</h1>
+            <p>Upload a research paper PDF and get structured analysis with GROBID</p>
+        </header>
+
+        <!-- Navigation -->
+        <nav class="tabs">
+            <button class="tab-btn active" onclick="showTab('upload')">📤 Upload Paper</button>
+            <button class="tab-btn" onclick="showTab('documents')">📁 My Documents</button>
+        </nav>
+
+        <!-- Upload Tab -->
+        <div id="upload-tab" class="tab-content active">
+            <div class="upload-section">
+                <h2>Upload Research Paper</h2>
+                
+                <!-- File Upload -->
+                <div class="upload-area" id="upload-area">
+                    <div class="upload-icon">📄</div>
+                    <p>Drop PDF file here or click to browse</p>
+                    <input type="file" id="file-input" accept=".pdf" hidden>
+                    <button class="btn-secondary" onclick="document.getElementById('file-input').click()">
+                        Choose File
+                    </button>
+                </div>
+
+                <!-- File Info -->
+                <div id="file-info" class="file-info hidden">
+                    <div class="file-details">
+                        <span id="file-name"></span>
+                        <span id="file-size"></span>
+                    </div>
+                    <button class="btn-primary" id="upload-btn" onclick="uploadFile()">
+                        🚀 Upload & Process
+                    </button>
+                </div>
+
+                <!-- Processing Status -->
+                <div id="processing-status" class="status-section hidden">
+                    <div class="status-header">
+                        <h3>Processing Status</h3>
+                        <span id="status-text">Uploading...</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div id="progress" class="progress-fill"></div>
+                    </div>
+                    <div id="processing-info"></div>
+                </div>
+
+                <!-- Results Section -->
+                <div id="results-section" class="results hidden">
+                    <h2>📊 Analysis Results</h2>
+                    
+                    <!-- Metrics -->
+                    <div class="metrics">
+                        <div class="metric-card">
+                            <div class="metric-number" id="sections-count">0</div>
+                            <div class="metric-label">Sections</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-number" id="authors-count">0</div>
+                            <div class="metric-label">Authors</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-number" id="references-count">0</div>
+                            <div class="metric-label">References</div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-number" id="process-time">0s</div>
+                            <div class="metric-label">Process Time</div>
+                        </div>
+                    </div>
+
+                    <!-- Paper Information -->
+                    <div class="paper-info">
+                        <div class="info-column">
+                            <div class="info-section">
+                                <h3>📄 Paper Information</h3>
+                                <div class="info-item">
+                                    <strong>Title:</strong>
+                                    <span id="paper-title"></span>
+                                </div>
+                            </div>
+
+                            <div class="info-section">
+                                <h3>📝 Abstract</h3>
+                                <div id="paper-abstract" class="abstract-text"></div>
+                            </div>
+                        </div>
+
+                        <div class="authors-column">
+                            <div class="info-section">
+                                <h3>👥 Authors</h3>
+                                <div id="paper-authors"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Sections -->
+                    <div class="info-section">
+                        <h3>📑 Document Sections</h3>
+                        <div id="paper-sections"></div>
+                    </div>
+
+                    <!-- References -->
+                    <div class="info-section">
+                        <h3>📚 References (First 5)</h3>
+                        <div id="paper-references"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Documents Tab -->
+        <div id="documents-tab" class="tab-content">
+            <div class="documents-section">
+                <h2>📁 My Documents</h2>
+                <div id="documents-list">
+                    <div class="loading">Loading documents...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Error Messages -->
+        <div id="error-message" class="error-message hidden">
+            <span id="error-text"></span>
+            <button onclick="hideError()" class="close-btn">×</button>
+        </div>
+
+        <!-- Success Messages -->
+        <div id="success-message" class="success-message hidden">
+            <span id="success-text"></span>
+            <button onclick="hideSuccess()" class="close-btn">×</button>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer>
+        <p>Built with FastAPI + GROBID | <a href="https://github.com" target="_blank">View on GitHub</a></p>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>

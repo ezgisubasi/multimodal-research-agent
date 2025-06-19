@@ -12,9 +12,6 @@ requests==2.31.0
 beautifulsoup4==4.12.2
 lxml==4.9.3
 
-# Streamlit Frontend
-streamlit==1.28.0
-
 # Utility Libraries
 python-dotenv==1.0.0
 aiofiles==23.2.1
