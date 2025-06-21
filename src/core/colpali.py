@@ -9,42 +9,50 @@ import logging
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 import numpy as np
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
 
 class ColPaliSearcher:
-    """Simple ColPali implementation following the demo approach."""
+    """ColPali implementation with binary quantization following demo approach."""
     
     def __init__(self, model_name: str = "vidore/colpali", device: str = "cpu", qdrant_url: str = "http://localhost:6333"):
         self.model_name = model_name
         self.device = device
-        self.qdrant_client = QdrantClient(url=qdrant_url)
-        self.collection_name = "research_papers"
+        self.qdrant_client = QdrantClient(url=qdrant_url) if qdrant_url != ":memory:" else QdrantClient(":memory:")
+        self.collection_name = "research_papers_binary"
         self.colpali_model = None
         self.colpali_processor = None
         self.setup_qdrant_collection()
         
     def setup_qdrant_collection(self):
-        """Setup Qdrant collection for ColPali multivectors."""
+        """Setup Qdrant collection with binary quantization like demo."""
         try:
             # Check if collection exists
             collections = self.qdrant_client.get_collections().collections
             collection_names = [col.name for col in collections]
             
             if self.collection_name not in collection_names:
-                # Create collection with multivector config like in demo
+                # Create collection with binary quantization like in demo
                 self.qdrant_client.create_collection(
                     collection_name=self.collection_name,
+                    on_disk_payload=True,  # store payload on disk
                     vectors_config=models.VectorParams(
                         size=128,
                         distance=models.Distance.COSINE,
+                        on_disk=True,  # move original vectors to disk
                         multivector_config=models.MultiVectorConfig(
                             comparator=models.MultiVectorComparator.MAX_SIM
                         ),
+                        quantization_config=models.BinaryQuantization(
+                            binary=models.BinaryQuantizationConfig(
+                                always_ram=True  # keep only quantized vectors in RAM
+                            ),
+                        ),
                     ),
                 )
-                logger.info(f"Created Qdrant collection: {self.collection_name}")
+                logger.info(f"Created Qdrant collection with binary quantization: {self.collection_name}")
             else:
                 logger.info(f"Using existing Qdrant collection: {self.collection_name}")
                 
@@ -53,11 +61,11 @@ class ColPaliSearcher:
             raise
     
     def load_model(self):
-        """Load ColPali model exactly like in demo."""
+        """Load ColPali model exactly like demo."""
         try:
             logger.info(f"Loading ColPali model: {self.model_name}")
             
-            # Load model and processor like in demo
+            # Load model and processor exactly like demo
             self.colpali_model = ColPali.from_pretrained(
                 self.model_name,
                 torch_dtype=torch.bfloat16,
@@ -98,8 +106,8 @@ class ColPaliSearcher:
             logger.error(f"Failed to convert PDF to images: {e}")
             raise
     
-    def index_pdf(self, pdf_path: str, paper_id: str = None) -> str:
-        """Index PDF following demo approach."""
+    def index_pdf(self, pdf_path: str, paper_id: str = None, batch_size: int = 4) -> str:
+        """Index PDF with batching like demo."""
         if self.colpali_model is None:
             self.load_model()
             
@@ -115,36 +123,52 @@ class ColPaliSearcher:
             # Convert PDF to images
             images = self.pdf_to_images(pdf_path)
             
-            # Process images like in demo
-            with torch.no_grad():
-                batch_images = self.colpali_processor.process_images(images).to(
-                    self.colpali_model.device
-                )
-                image_embeddings = self.colpali_model(**batch_images)
+            # Process in batches like demo
+            all_points = []
             
-            # Prepare points for Qdrant (following demo exactly)
-            points = []
-            for page_idx, embedding in enumerate(image_embeddings):
-                # Convert to multivector like in demo
-                multivector = embedding.cpu().float().numpy().tolist()
-                
-                point = models.PointStruct(
-                    id=f"{paper_id}_page_{page_idx}",
-                    vector=multivector,  # This is a list of vectors (multivector)
-                    payload={
-                        "paper_id": paper_id,
-                        "page_number": page_idx,
-                        "pdf_path": pdf_path,
-                        "total_pages": len(images)
-                    }
-                )
-                points.append(point)
+            with tqdm(total=len(images), desc="Processing pages") as pbar:
+                for i in range(0, len(images), batch_size):
+                    batch_images = images[i:i + batch_size]
+                    
+                    # Process images like in demo
+                    with torch.no_grad():
+                        batch_processed = self.colpali_processor.process_images(batch_images).to(
+                            self.colpali_model.device
+                        )
+                        image_embeddings = self.colpali_model(**batch_processed)
+                    
+                    # Prepare points for this batch
+                    for j, embedding in enumerate(image_embeddings):
+                        page_idx = i + j
+                        # Convert to multivector like demo
+                        multivector = embedding.cpu().float().numpy().tolist()
+                        
+                        point = models.PointStruct(
+                            id=f"{paper_id}_page_{page_idx}",
+                            vector=multivector,
+                            payload={
+                                "paper_id": paper_id,
+                                "page_number": page_idx,
+                                "pdf_path": pdf_path,
+                                "total_pages": len(images),
+                                "source": "research_paper"
+                            }
+                        )
+                        all_points.append(point)
+                    
+                    pbar.update(len(batch_images))
             
-            # Upload to Qdrant
+            # Upload all points to Qdrant
             self.qdrant_client.upsert(
                 collection_name=self.collection_name,
-                points=points,
+                points=all_points,
                 wait=True,
+            )
+            
+            # Update indexing threshold like demo
+            self.qdrant_client.update_collection(
+                collection_name=self.collection_name,
+                optimizer_config=models.OptimizersConfigDiff(indexing_threshold=10),
             )
             
             logger.info(f"Successfully indexed {paper_id} with {len(images)} pages")
@@ -155,29 +179,36 @@ class ColPaliSearcher:
             raise
     
     def search(self, query: str, top_k: int = 5) -> List[Dict]:
-        """Search following demo approach."""
+        """Search with binary quantization settings like demo."""
         if self.colpali_model is None:
             self.load_model()
             
         try:
             logger.info(f"Searching for: {query}")
             
-            # Process query like in demo
+            # Process query exactly like demo
             with torch.no_grad():
                 batch_query = self.colpali_processor.process_queries([query]).to(
                     self.colpali_model.device
                 )
                 query_embedding = self.colpali_model(**batch_query)
             
-            # Convert to multivector like in demo
+            # Convert to multivector like demo
             multivector_query = query_embedding[0].cpu().float().numpy().tolist()
             
-            # Search in Qdrant using query_points like in demo
+            # Search with binary quantization settings like demo
             search_result = self.qdrant_client.query_points(
                 collection_name=self.collection_name,
                 query=multivector_query,
                 limit=top_k,
-                with_payload=True
+                with_payload=True,
+                search_params=models.SearchParams(
+                    quantization=models.QuantizationSearchParams(
+                        ignore=False,
+                        rescore=True,
+                        oversampling=2.0,
+                    )
+                )
             )
             
             # Format results
@@ -200,7 +231,6 @@ class ColPaliSearcher:
     def get_document_info(self, paper_id: str) -> Dict:
         """Get document info from Qdrant."""
         try:
-            # Search for any page of this document
             search_results = self.qdrant_client.scroll(
                 collection_name=self.collection_name,
                 scroll_filter=models.Filter(
@@ -232,7 +262,6 @@ class ColPaliSearcher:
     def list_documents(self) -> List[Dict]:
         """List all indexed documents."""
         try:
-            # Get all points and extract unique documents
             all_points = self.qdrant_client.scroll(
                 collection_name=self.collection_name,
                 limit=1000,
