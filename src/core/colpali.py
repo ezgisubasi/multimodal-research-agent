@@ -2,72 +2,62 @@ import torch
 from PIL import Image
 import fitz  # PyMuPDF
 from colpali_engine.models import ColPali, ColPaliProcessor
-from pathlib import Path
 import hashlib
 from typing import List, Dict
 import logging
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
-import numpy as np
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
 
 class ColPaliSearcher:
-    """ColPali implementation with Qdrant Cloud support (like demo)."""
+    """Simple ColPali implementation for Qdrant Cloud."""
     
-    def __init__(self, model_name: str = "vidore/colpali", device: str = "cpu", qdrant_url: str = "http://localhost:6333", qdrant_api_key: str = ""):
+    def __init__(self, model_name: str, device: str, qdrant_url: str, qdrant_api_key: str):
         self.model_name = model_name
         self.device = device
+        self.collection_name = "research_papers"
         
-        # Initialize Qdrant client exactly like demo
-        if qdrant_url == ":memory:":
-            self.qdrant_client = QdrantClient(":memory:")
-        elif qdrant_api_key and qdrant_api_key.strip():
-            # Qdrant Cloud with API key (like demo)
-            self.qdrant_client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
-        else:
-            # Local Qdrant
-            self.qdrant_client = QdrantClient(url=qdrant_url)
+        # Qdrant Cloud client (required)
+        if not qdrant_url or not qdrant_api_key:
+            raise ValueError("Qdrant Cloud URL and API key are required")
             
-        self.collection_name = "research_papers_binary"
+        self.qdrant_client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
         self.colpali_model = None
         self.colpali_processor = None
         self._setup_collection()
         
     def _setup_collection(self):
-        """Setup Qdrant collection exactly like demo."""
+        """Setup Qdrant collection."""
         try:
-            collections = self.qdrant_client.get_collections().collections
-            collection_names = [col.name for col in collections]
+            collections = [col.name for col in self.qdrant_client.get_collections().collections]
             
-            if self.collection_name not in collection_names:
-                # Create collection exactly like demo
+            if self.collection_name not in collections:
                 self.qdrant_client.create_collection(
                     collection_name=self.collection_name,
-                    on_disk_payload=True,  # store payload on disk
                     vectors_config=models.VectorParams(
                         size=128,
                         distance=models.Distance.COSINE,
-                        on_disk=True,  # move original vectors to disk
                         multivector_config=models.MultiVectorConfig(
                             comparator=models.MultiVectorComparator.MAX_SIM
                         ),
                         quantization_config=models.BinaryQuantization(
-                            binary=models.BinaryQuantizationConfig(
-                                always_ram=True  # keep only quantized vectors in RAM
-                            ),
+                            binary=models.BinaryQuantizationConfig(always_ram=True)
                         ),
                     ),
                 )
-                logger.info(f"Created Qdrant collection: {self.collection_name}")
+                logger.info(f"Created collection: {self.collection_name}")
         except Exception as e:
-            logger.error(f"Failed to setup Qdrant collection: {e}")
+            logger.error(f"Failed to setup collection: {e}")
             raise
     
     def load_model(self):
-        """Load ColPali model exactly like demo."""
+        """Load ColPali model."""
+        if self.colpali_model is not None:
+            return
+            
         try:
             logger.info(f"Loading ColPali model: {self.model_name}")
             
@@ -81,155 +71,140 @@ class ColPaliSearcher:
                 "vidore/colpaligemma-3b-pt-448-base"
             )
             
-            logger.info("ColPali model loaded successfully")
+            logger.info("Model loaded successfully")
         except Exception as e:
-            logger.error(f"Failed to load ColPali model: {e}")
+            logger.error(f"Failed to load model: {e}")
             raise
     
     def index_pdf(self, pdf_path: str, paper_id: str = None, batch_size: int = 4) -> str:
-        """Index PDF exactly like demo."""
-        if self.colpali_model is None:
-            self.load_model()
+        """Index PDF document."""
+        self.load_model()
+        
+        # Generate paper ID
+        if paper_id is None:
+            with open(pdf_path, 'rb') as f:
+                file_hash = hashlib.md5(f.read()).hexdigest()[:8]
+            paper_id = f"paper_{file_hash}"
+        
+        logger.info(f"Indexing PDF: {paper_id}")
+        
+        # Convert PDF to images
+        images = self._pdf_to_images(pdf_path)
+        
+        # Process in batches
+        for i in range(0, len(images), batch_size):
+            batch_images = images[i:i + batch_size]
             
-        try:
-            # Generate paper ID
-            if paper_id is None:
-                with open(pdf_path, 'rb') as f:
-                    file_hash = hashlib.md5(f.read()).hexdigest()[:8]
-                paper_id = f"paper_{file_hash}"
-            
-            logger.info(f"Indexing PDF: {pdf_path} as {paper_id}")
-            
-            # Convert PDF to images
-            images = self._pdf_to_images(pdf_path)
-            
-            # Process in batches like demo
-            with tqdm(total=len(images), desc="Indexing Progress") as pbar:
-                for i in range(0, len(images), batch_size):
-                    batch_images = images[i:i + batch_size]
-                    
-                    # Process and encode images like demo
-                    with torch.no_grad():
-                        batch_processed = self.colpali_processor.process_images(batch_images).to(
-                            self.colpali_model.device
-                        )
-                        image_embeddings = self.colpali_model(**batch_processed)
-                    
-                    # Prepare points for Qdrant like demo
-                    points = []
-                    for j, embedding in enumerate(image_embeddings):
-                        page_idx = i + j
-                        # Convert embedding to multivector like demo
-                        multivector = embedding.cpu().float().numpy().tolist()
-                        
-                        points.append(
-                            models.PointStruct(
-                                id=i + j,  # Use simple index like demo
-                                vector=multivector,  # List of vectors
-                                payload={
-                                    "paper_id": paper_id,
-                                    "page_number": page_idx,
-                                    "pdf_path": pdf_path,
-                                    "total_pages": len(images)
-                                }
-                            )
-                        )
-                    
-                    # Upload points to Qdrant like demo
-                    try:
-                        self.qdrant_client.upsert(
-                            collection_name=self.collection_name,
-                            points=points,
-                            wait=False,  # Don't wait like demo
-                        )
-                    except Exception as e:
-                        print(f"Error during upsert: {e}")
-                        continue
-                    
-                    pbar.update(batch_size)
-            
-            # Update collection like demo
-            self.qdrant_client.update_collection(
-                collection_name=self.collection_name,
-                optimizer_config=models.OptimizersConfigDiff(indexing_threshold=10),
-            )
-            
-            logger.info(f"Successfully indexed {paper_id} with {len(images)} pages")
-            return paper_id
-            
-        except Exception as e:
-            logger.error(f"Failed to index PDF: {e}")
-            raise
-    
-    def search(self, query: str, top_k: int = 5) -> List[Dict]:
-        """Search exactly like demo."""
-        if self.colpali_model is None:
-            self.load_model()
-            
-        try:
-            logger.info(f"Searching for: {query}")
-            
-            # Process query like demo
+            # Encode images
             with torch.no_grad():
-                batch_query = self.colpali_processor.process_queries([query]).to(
+                batch_processed = self.colpali_processor.process_images(batch_images).to(
                     self.colpali_model.device
                 )
-                query_embedding = self.colpali_model(**batch_query)
+                embeddings = self.colpali_model(**batch_processed)
             
-            # Convert to multivector like demo
-            multivector_query = query_embedding[0].cpu().float().numpy().tolist()
-            
-            # Search like demo
-            search_result = self.qdrant_client.query_points(
-                collection_name=self.collection_name,
-                query=multivector_query,
-                limit=top_k,
-                timeout=100,
-                search_params=models.SearchParams(
-                    quantization=models.QuantizationSearchParams(
-                        ignore=False,
-                        rescore=True,
-                        oversampling=2.0,
+            # Create points
+            points = []
+            for j, embedding in enumerate(embeddings):
+                page_idx = i + j
+                multivector = embedding.cpu().float().numpy().tolist()
+                
+                points.append(
+                    models.PointStruct(
+                        id=hash(f"{paper_id}_{page_idx}") % (2**63),  # Unique ID
+                        vector=multivector,
+                        payload={
+                            "paper_id": paper_id,
+                            "page_number": page_idx,
+                            "pdf_path": pdf_path,
+                            "total_pages": len(images)
+                        }
                     )
                 )
+            
+            # Upload to Qdrant
+            self.qdrant_client.upsert(
+                collection_name=self.collection_name,
+                points=points,
+                wait=True
             )
+        
+        logger.info(f"Indexed {paper_id} with {len(images)} pages")
+        return paper_id
+    
+    def search(self, query: str, top_k: int = 5) -> List[Dict]:
+        """Search documents."""
+        self.load_model()
+        
+        logger.info(f"Searching: {query}")
+        
+        # Encode query
+        with torch.no_grad():
+            batch_query = self.colpali_processor.process_queries([query]).to(
+                self.colpali_model.device
+            )
+            query_embedding = self.colpali_model(**batch_query)
+        
+        multivector_query = query_embedding[0].cpu().float().numpy().tolist()
+        
+        # Search
+        results = self.qdrant_client.query_points(
+            collection_name=self.collection_name,
+            query=multivector_query,
+            limit=top_k,
+            timeout=60
+        )
+        
+        # Format results
+        formatted_results = []
+        for point in results.points:
+            formatted_results.append({
+                "paper_id": point.payload["paper_id"],
+                "page_number": point.payload["page_number"],
+                "score": point.score,
+                "pdf_path": point.payload["pdf_path"]
+            })
+        
+        return formatted_results
+    
+    def get_documents(self) -> List[Dict]:
+        """Get list of indexed documents."""
+        try:
+            # Get unique documents
+            results = self.qdrant_client.scroll(
+                collection_name=self.collection_name,
+                limit=1000,
+                with_payload=True
+            )[0]
             
-            # Format results
-            results = []
-            for point in search_result.points:
-                results.append({
-                    "paper_id": point.payload["paper_id"],
-                    "page_number": point.payload["page_number"],
-                    "score": point.score,
-                    "pdf_path": point.payload["pdf_path"]
-                })
+            # Group by paper_id
+            docs = {}
+            for point in results:
+                paper_id = point.payload["paper_id"]
+                if paper_id not in docs:
+                    docs[paper_id] = {
+                        "paper_id": paper_id,
+                        "pdf_path": point.payload["pdf_path"],
+                        "total_pages": point.payload["total_pages"]
+                    }
             
-            logger.info(f"Found {len(results)} results")
-            return results
-            
+            return list(docs.values())
         except Exception as e:
-            logger.error(f"Search failed: {e}")
-            raise
+            logger.error(f"Failed to get documents: {e}")
+            return []
     
     def _pdf_to_images(self, pdf_path: str) -> List[Image.Image]:
-        """Convert PDF pages to images."""
-        try:
-            doc = fitz.open(pdf_path)
-            images = []
+        """Convert PDF to images."""
+        doc = fitz.open(pdf_path)
+        images = []
+        
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
+            img_data = pix.tobytes("png")
             
-            for page_num in range(len(doc)):
-                page = doc[page_num]
-                pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
-                img_data = pix.tobytes("png")
-                
-                from io import BytesIO
-                img = Image.open(BytesIO(img_data))
-                images.append(img)
-                
-            doc.close()
-            logger.info(f"Converted {len(images)} pages to images")
-            return images
+            from io import BytesIO
+            img = Image.open(BytesIO(img_data))
+            images.append(img)
             
-        except Exception as e:
-            logger.error(f"Failed to convert PDF to images: {e}")
-            raise
+        doc.close()
+        return images

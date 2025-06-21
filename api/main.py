@@ -4,9 +4,9 @@ import uvicorn
 import logging
 from pathlib import Path
 import sys
-import os
+import hashlib
 
-# Add src to path for imports
+# Add src to path
 sys.path.append(str(Path(__file__).parent.parent))
 
 from src.core.colpali import ColPaliSearcher
@@ -19,11 +19,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Initialize FastAPI
-app = FastAPI(
-    title=settings.app_name,
-    description="Multimodal Research Assistant with ColPali",
-    version=settings.version
-)
+app = FastAPI(title=settings.app_name, description="Multimodal Research Assistant")
 
 # Enable CORS
 app.add_middleware(
@@ -34,136 +30,148 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize ColPali searcher
-searcher = ColPaliSearcher(
-    device=settings.device, 
-    qdrant_url=settings.qdrant_url,
-    qdrant_api_key=settings.qdrant_api_key
-)
+# Global searcher
+searcher = None
 
-
-@app.on_event("startup")
-async def startup_event():
-    """Load ColPali model on startup."""
-    try:
-        logger.info("Loading ColPali model...")
-        searcher.load_model()
-        logger.info("ColPali model loaded successfully")
-    except Exception as e:
-        logger.error(f"Failed to load ColPali model: {e}")
+def get_searcher():
+    """Get searcher instance."""
+    global searcher
+    if searcher is None:
+        searcher = ColPaliSearcher(
+            model_name=settings.colpali_model,
+            device=settings.device,
+            qdrant_url=settings.qdrant_url,
+            qdrant_api_key=settings.qdrant_api_key
+        )
+    return searcher
 
 
 @app.get("/")
 async def root():
-    """API information."""
+    """API info."""
     return {
         "message": f"Welcome to {settings.app_name}",
-        "version": settings.version,
-        "description": "Upload PDFs and search with multimodal queries",
         "endpoints": {
-            "upload": "POST /upload - Upload PDF file",
-            "search": "POST /search - Search across documents"
+            "upload": "POST /upload",
+            "search": "POST /search", 
+            "documents": "GET /documents",
+            "health": "GET /health"
         }
     }
 
 
-@app.post("/upload", response_model=UploadResponse)
+@app.post("/upload")
 async def upload_pdf(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     paper_id: str = None
 ):
-    """Upload and index a PDF document."""
+    """Upload and index PDF."""
     
     # Validate file
     if not file.filename.endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+        raise HTTPException(status_code=400, detail="Only PDF files supported")
     
     if file.size and file.size > settings.max_file_size:
-        raise HTTPException(
-            status_code=400, 
-            detail=f"File too large. Max size: {settings.max_file_size // 1024 // 1024}MB"
-        )
+        raise HTTPException(status_code=400, detail="File too large")
     
     try:
-        # Save uploaded file
+        # Save file
         file_path = settings.upload_dir / file.filename
         with open(file_path, "wb") as buffer:
             content = await file.read()
             buffer.write(content)
         
-        logger.info(f"Saved file: {file_path}")
+        # Generate paper_id
+        if paper_id is None:
+            paper_id = f"paper_{hashlib.md5(file.filename.encode()).hexdigest()[:8]}"
         
-        # Index PDF in background
+        # Index in background
         background_tasks.add_task(index_pdf_task, str(file_path), paper_id)
         
-        # Return immediate response
-        return UploadResponse(
-            paper_id=paper_id or "processing",
-            message="PDF uploaded successfully. Indexing in progress.",
-            num_pages=0,
-            status="processing"
-        )
+        return {
+            "paper_id": paper_id,
+            "message": "PDF uploaded. Indexing in progress.",
+            "status": "processing"
+        }
         
     except Exception as e:
         logger.error(f"Upload failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-async def index_pdf_task(file_path: str, paper_id: str = None):
-    """Background task to index PDF."""
+async def index_pdf_task(file_path: str, paper_id: str):
+    """Background indexing task."""
     try:
-        logger.info(f"Starting indexing for: {file_path}")
-        indexed_id = searcher.index_pdf(file_path, paper_id)
-        logger.info(f"Successfully indexed: {indexed_id}")
+        logger.info(f"Indexing: {file_path}")
+        searcher = get_searcher()
+        searcher.index_pdf(file_path, paper_id)
+        logger.info(f"Indexed: {paper_id}")
     except Exception as e:
-        logger.error(f"Indexing failed for {file_path}: {e}")
+        logger.error(f"Indexing failed: {e}")
 
 
-@app.post("/search", response_model=SearchResponse)
+@app.post("/search")
 async def search_documents(request: SearchRequest):
-    """Search across indexed documents."""
+    """Search documents."""
     try:
-        logger.info(f"Search request: {request.query}")
-        
-        # Perform search
+        searcher = get_searcher()
         results = searcher.search(request.query, top_k=request.top_k)
         
-        # Convert to response format
         search_results = [
-            SearchResult(
-                paper_id=result["paper_id"],
-                page_number=result["page_number"],
-                score=result["score"],
-                pdf_path=result["pdf_path"]
-            )
-            for result in results
+            {
+                "paper_id": r["paper_id"],
+                "page_number": r["page_number"],
+                "score": r["score"],
+                "pdf_path": r["pdf_path"]
+            }
+            for r in results
         ]
         
-        return SearchResponse(
-            query=request.query,
-            results=search_results,
-            total_results=len(search_results)
-        )
+        return {
+            "query": request.query,
+            "results": search_results,
+            "total_results": len(search_results)
+        }
         
     except Exception as e:
         logger.error(f"Search failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/documents")
+async def list_documents():
+    """List indexed documents."""
+    try:
+        searcher = get_searcher()
+        docs = searcher.get_documents()
+        
+        return {
+            "documents": docs,
+            "total_documents": len(docs)
+        }
+        
+    except Exception as e:
+        logger.error(f"List documents failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/health")
 async def health_check():
-    """API health check."""
-    return {
-        "status": "healthy",
-        "model_loaded": searcher.colpali_model is not None
-    }
+    """Health check."""
+    try:
+        searcher = get_searcher()
+        return {
+            "status": "healthy",
+            "model_loaded": searcher.colpali_model is not None,
+            "qdrant_connected": True
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "error": str(e)
+        }
 
 
 if __name__ == "__main__":
-    uvicorn.run(
-        "main:app", 
-        host=settings.host, 
-        port=settings.port, 
-        reload=settings.debug
-    )
+    uvicorn.run("main:app", host=settings.host, port=settings.port, reload=settings.debug)
