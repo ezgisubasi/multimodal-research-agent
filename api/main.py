@@ -11,11 +11,8 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from src.core.colpali import ColPaliSearcher
 from src.config import settings
-from api.models.requests import SearchRequest, UploadRequest
-from api.models.responses import (
-    UploadResponse, SearchResponse, SearchResult, 
-    ListDocumentsResponse, DocumentInfo
-)
+from api.models.requests import SearchRequest
+from api.models.responses import UploadResponse, SearchResponse, SearchResult
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -61,8 +58,7 @@ async def root():
         "description": "Upload PDFs and search with multimodal queries",
         "endpoints": {
             "upload": "POST /upload - Upload PDF file",
-            "search": "POST /search - Search across documents",
-            "documents": "GET /documents - List indexed documents"
+            "search": "POST /search - Search across documents"
         }
     }
 
@@ -101,7 +97,7 @@ async def upload_pdf(
         return UploadResponse(
             paper_id=paper_id or "processing",
             message="PDF uploaded successfully. Indexing in progress.",
-            num_pages=0,  # Will be updated after processing
+            num_pages=0,
             status="processing"
         )
         
@@ -151,39 +147,12 @@ async def search_documents(request: SearchRequest):
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 
-@app.get("/documents", response_model=ListDocumentsResponse)
-async def list_documents():
-    """List all indexed documents."""
-    try:
-        docs = searcher.list_documents()
-        
-        document_info = [
-            DocumentInfo(
-                paper_id=doc["paper_id"],
-                pdf_path=doc["pdf_path"],
-                num_pages=doc["num_pages"],
-                indexed=doc["indexed"]
-            )
-            for doc in docs
-        ]
-        
-        return ListDocumentsResponse(
-            documents=document_info,
-            total_documents=len(document_info)
-        )
-        
-    except Exception as e:
-        logger.error(f"Failed to list documents: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to list documents: {str(e)}")
-
-
 @app.get("/health")
 async def health_check():
     """API health check."""
     return {
         "status": "healthy",
-        "model_loaded": searcher.model is not None,
-        "indexed_documents": len(searcher.index_data)
+        "model_loaded": searcher.colpali_model is not None
     }
 
 
