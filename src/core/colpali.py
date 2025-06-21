@@ -68,7 +68,8 @@ class ColPaliSearcher:
             )
             
             self.colpali_processor = ColPaliProcessor.from_pretrained(
-                "vidore/colpaligemma-3b-pt-448-base"
+                "vidore/colpaligemma-3b-pt-448-base",
+                use_fast = True
             )
             
             logger.info("Model loaded successfully")
