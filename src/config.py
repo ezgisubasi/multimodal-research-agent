@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     
     # Qdrant Vector Database
     qdrant_url: str = Field(default="http://localhost:6333")
+    qdrant_api_key: str = Field(default="", description="Qdrant Cloud API key (optional)")
     qdrant_collection: str = Field(default="research_papers")
     
     # ColPali Model Settings
