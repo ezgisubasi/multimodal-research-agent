@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     index_dir: Path = Field(default=Path("data/index"))
     max_file_size: int = Field(default=50 * 1024 * 1024)  # 50MB
     
+    # Qdrant Vector Database
+    qdrant_url: str = Field(default="http://localhost:6333")
+    qdrant_collection: str = Field(default="research_papers")
+    
     # ColPali Model Settings
     colpali_model: str = Field(default="vidore/colpali")
     device: str = Field(default="cpu")  # Change to "cuda" if you have GPU

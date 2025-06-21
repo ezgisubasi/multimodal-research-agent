@@ -38,7 +38,7 @@ app.add_middleware(
 )
 
 # Initialize ColPali searcher
-searcher = ColPaliSearcher(device=settings.device)
+searcher = ColPaliSearcher(device=settings.device, qdrant_url=settings.qdrant_url)
 
 
 @app.on_event("startup")
