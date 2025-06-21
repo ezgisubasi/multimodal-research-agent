@@ -15,37 +15,48 @@ logger = logging.getLogger(__name__)
 
 
 class ColPaliSearcher:
-    """Simple ColPali implementation with binary quantization."""
+    """ColPali implementation with Qdrant Cloud support (like demo)."""
     
-    def __init__(self, model_name: str = "vidore/colpali", device: str = "cpu", qdrant_url: str = "http://localhost:6333"):
+    def __init__(self, model_name: str = "vidore/colpali", device: str = "cpu", qdrant_url: str = "http://localhost:6333", qdrant_api_key: str = ""):
         self.model_name = model_name
         self.device = device
-        self.qdrant_client = QdrantClient(url=qdrant_url) if qdrant_url != ":memory:" else QdrantClient(":memory:")
+        
+        # Initialize Qdrant client exactly like demo
+        if qdrant_url == ":memory:":
+            self.qdrant_client = QdrantClient(":memory:")
+        elif qdrant_api_key and qdrant_api_key.strip():
+            # Qdrant Cloud with API key (like demo)
+            self.qdrant_client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
+        else:
+            # Local Qdrant
+            self.qdrant_client = QdrantClient(url=qdrant_url)
+            
         self.collection_name = "research_papers_binary"
         self.colpali_model = None
         self.colpali_processor = None
         self._setup_collection()
         
     def _setup_collection(self):
-        """Setup Qdrant collection with binary quantization."""
+        """Setup Qdrant collection exactly like demo."""
         try:
             collections = self.qdrant_client.get_collections().collections
             collection_names = [col.name for col in collections]
             
             if self.collection_name not in collection_names:
+                # Create collection exactly like demo
                 self.qdrant_client.create_collection(
                     collection_name=self.collection_name,
-                    on_disk_payload=True,
+                    on_disk_payload=True,  # store payload on disk
                     vectors_config=models.VectorParams(
                         size=128,
                         distance=models.Distance.COSINE,
-                        on_disk=True,
+                        on_disk=True,  # move original vectors to disk
                         multivector_config=models.MultiVectorConfig(
                             comparator=models.MultiVectorComparator.MAX_SIM
                         ),
                         quantization_config=models.BinaryQuantization(
                             binary=models.BinaryQuantizationConfig(
-                                always_ram=True
+                                always_ram=True  # keep only quantized vectors in RAM
                             ),
                         ),
                     ),
@@ -56,7 +67,7 @@ class ColPaliSearcher:
             raise
     
     def load_model(self):
-        """Load ColPali model."""
+        """Load ColPali model exactly like demo."""
         try:
             logger.info(f"Loading ColPali model: {self.model_name}")
             
@@ -67,8 +78,7 @@ class ColPaliSearcher:
             )
             
             self.colpali_processor = ColPaliProcessor.from_pretrained(
-                "vidore/colpaligemma-3b-pt-448-base",
-                use_fast=True  # Use fast processor for speed
+                "vidore/colpaligemma-3b-pt-448-base"
             )
             
             logger.info("ColPali model loaded successfully")
@@ -76,8 +86,8 @@ class ColPaliSearcher:
             logger.error(f"Failed to load ColPali model: {e}")
             raise
     
-    def index_pdf(self, pdf_path: str, paper_id: str = None, batch_size: int = 4, max_pages: int = 10) -> str:
-        """Index PDF for search."""
+    def index_pdf(self, pdf_path: str, paper_id: str = None, batch_size: int = 4) -> str:
+        """Index PDF exactly like demo."""
         if self.colpali_model is None:
             self.load_model()
             
@@ -90,48 +100,58 @@ class ColPaliSearcher:
             
             logger.info(f"Indexing PDF: {pdf_path} as {paper_id}")
             
-            # Convert PDF to images (limited pages for speed)
-            images = self._pdf_to_images(pdf_path, max_pages)
+            # Convert PDF to images
+            images = self._pdf_to_images(pdf_path)
             
-            # Process in batches
-            all_points = []
-            
-            with tqdm(total=len(images), desc="Processing pages") as pbar:
+            # Process in batches like demo
+            with tqdm(total=len(images), desc="Indexing Progress") as pbar:
                 for i in range(0, len(images), batch_size):
                     batch_images = images[i:i + batch_size]
                     
+                    # Process and encode images like demo
                     with torch.no_grad():
                         batch_processed = self.colpali_processor.process_images(batch_images).to(
                             self.colpali_model.device
                         )
                         image_embeddings = self.colpali_model(**batch_processed)
                     
+                    # Prepare points for Qdrant like demo
+                    points = []
                     for j, embedding in enumerate(image_embeddings):
                         page_idx = i + j
+                        # Convert embedding to multivector like demo
                         multivector = embedding.cpu().float().numpy().tolist()
                         
-                        # Use integer ID for Qdrant compatibility
-                        point_id = hash(f"{paper_id}_page_{page_idx}") % (2**63 - 1)
-                        
-                        point = models.PointStruct(
-                            id=point_id,
-                            vector=multivector,
-                            payload={
-                                "paper_id": paper_id,
-                                "page_number": page_idx,
-                                "pdf_path": pdf_path,
-                                "total_pages": len(images)
-                            }
+                        points.append(
+                            models.PointStruct(
+                                id=i + j,  # Use simple index like demo
+                                vector=multivector,  # List of vectors
+                                payload={
+                                    "paper_id": paper_id,
+                                    "page_number": page_idx,
+                                    "pdf_path": pdf_path,
+                                    "total_pages": len(images)
+                                }
+                            )
                         )
-                        all_points.append(point)
                     
-                    pbar.update(len(batch_images))
+                    # Upload points to Qdrant like demo
+                    try:
+                        self.qdrant_client.upsert(
+                            collection_name=self.collection_name,
+                            points=points,
+                            wait=False,  # Don't wait like demo
+                        )
+                    except Exception as e:
+                        print(f"Error during upsert: {e}")
+                        continue
+                    
+                    pbar.update(batch_size)
             
-            # Upload to Qdrant
-            self.qdrant_client.upsert(
+            # Update collection like demo
+            self.qdrant_client.update_collection(
                 collection_name=self.collection_name,
-                points=all_points,
-                wait=True,
+                optimizer_config=models.OptimizersConfigDiff(indexing_threshold=10),
             )
             
             logger.info(f"Successfully indexed {paper_id} with {len(images)} pages")
@@ -142,29 +162,29 @@ class ColPaliSearcher:
             raise
     
     def search(self, query: str, top_k: int = 5) -> List[Dict]:
-        """Search across indexed documents."""
+        """Search exactly like demo."""
         if self.colpali_model is None:
             self.load_model()
             
         try:
             logger.info(f"Searching for: {query}")
             
-            # Process query
+            # Process query like demo
             with torch.no_grad():
                 batch_query = self.colpali_processor.process_queries([query]).to(
                     self.colpali_model.device
                 )
                 query_embedding = self.colpali_model(**batch_query)
             
-            # Convert to multivector
+            # Convert to multivector like demo
             multivector_query = query_embedding[0].cpu().float().numpy().tolist()
             
-            # Search with binary quantization optimization
+            # Search like demo
             search_result = self.qdrant_client.query_points(
                 collection_name=self.collection_name,
                 query=multivector_query,
                 limit=top_k,
-                with_payload=True,
+                timeout=100,
                 search_params=models.SearchParams(
                     quantization=models.QuantizationSearchParams(
                         ignore=False,
@@ -191,18 +211,15 @@ class ColPaliSearcher:
             logger.error(f"Search failed: {e}")
             raise
     
-    def _pdf_to_images(self, pdf_path: str, max_pages: int = 10) -> List[Image.Image]:
+    def _pdf_to_images(self, pdf_path: str) -> List[Image.Image]:
         """Convert PDF pages to images."""
         try:
             doc = fitz.open(pdf_path)
             images = []
             
-            num_pages = min(len(doc), max_pages)
-            logger.info(f"Processing {num_pages} pages")
-            
-            for page_num in range(num_pages):
+            for page_num in range(len(doc)):
                 page = doc[page_num]
-                pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5))  # Reduced quality for speed
+                pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
                 img_data = pix.tobytes("png")
                 
                 from io import BytesIO
@@ -210,6 +227,7 @@ class ColPaliSearcher:
                 images.append(img)
                 
             doc.close()
+            logger.info(f"Converted {len(images)} pages to images")
             return images
             
         except Exception as e:
