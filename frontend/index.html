@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Research Assistant</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔬 Multimodal Research Assistant</h1>
+            <p>Upload PDFs and search with natural language queries</p>
+        </header>
+
+        <div class="main-content">
+            <!-- Upload Section -->
+            <section class="upload-section">
+                <h2>Upload Document</h2>
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-content">
+                        <div class="upload-icon">📄</div>
+                        <p>Drag & drop your PDF here or click to browse</p>
+                        <input type="file" id="fileInput" accept=".pdf" hidden>
+                        <button class="btn-primary" onclick="document.getElementById('fileInput').click()">
+                            Choose File
+                        </button>
+                    </div>
+                    <div class="upload-progress" id="uploadProgress" style="display: none;">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progressFill"></div>
+                        </div>
+                        <p id="progressText">Uploading...</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Search Section -->
+            <section class="search-section">
+                <h2>Search Documents</h2>
+                <div class="search-box">
+                    <input type="text" id="searchInput" placeholder="Ask anything about your documents...">
+                    <button class="btn-primary" id="searchBtn">Search</button>
+                </div>
+                <div class="search-results" id="searchResults"></div>
+            </section>
+
+            <!-- Documents Section -->
+            <section class="documents-section">
+                <h2>Indexed Documents</h2>
+                <div class="documents-list" id="documentsList">
+                    <p class="placeholder">No documents uploaded yet</p>
+                </div>
+                <button class="btn-secondary" id="refreshBtn">Refresh List</button>
+            </section>
+        </div>
+
+        <!-- Status Messages -->
+        <div class="status-message" id="statusMessage"></div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
